@@ -1,0 +1,57 @@
+#!/bin/bash
+
+HTTP_TUNN_PORT=10080
+HTTPS_TUNN_PORT=10443
+
+function _get-ip-by-host() {
+  local IP_ADDR=$(python -c "import socket; print socket.gethostbyname('$1')") || (echo "failed to get addr" && return 1)
+  echo $IP_ADDR
+}
+
+function _entry-etc-hosts() {
+  echo "127.0.0.1 $1 # [tunnel-http] don't remove this comment" | sudo tee -a /etc/hosts > /dev/null 2>&1
+}
+
+function _clean-etc-hosts() {
+  sudo perl -i -pe 's/.+\[tunnel-http\].+\n//gc' /etc/hosts
+}
+
+function _start-tunnel-http() {
+  local TARGET_HOST=$1
+  local TUNN_HOST=$2
+  local TARGET_HOST_ADDR=$(_get-ip-by-host ${TARGET_HOST})
+  ([ -z "${TARGET_HOST}" ] || [ -z "${TUNN_HOST}" ] || [ -z "${TARGET_HOST_ADDR}" ]) && (echo "oops" && return 1)
+
+  _entry-etc-hosts $TARGET_HOST || echo "failed to enty /etc/hosts"
+
+  ssh -fN -A -t -L ${HTTP_TUNN_PORT}:${TARGET_HOST_ADDR}:80 ${TUNN_HOST} > /dev/null 2>&1 || echo "failed to tunn 80"
+  ssh -fN -A -t -L ${HTTPS_TUNN_PORT}:${TARGET_HOST_ADDR}:443 ${TUNN_HOST} > /dev/null 2>&1 || echo "failed to tunn 443"
+
+  sudo ssh -fN -A -t -L 80:localhost:${HTTP_TUNN_PORT} $(whoami)@localhost > /dev/null 2>&1 || echo "failed to listen to 80"
+  sudo ssh -fN -A -t -L 443:localhost:${HTTPS_TUNN_PORT} $(whoami)@localhost > /dev/null 2>&1 || echo "failed to listen to 443"
+
+  echo "tunnel http(s) started"
+}
+
+function _stop-tunnel-http() {
+  _clean-etc-hosts
+
+  sudo pkill -f "ssh -fN -A -t -L 80:"
+  sudo pkill -f "ssh -fN -A -t -L 443:"
+  sudo pkill -f "ssh -fN -A -t -L ${HTTP_TUNN_PORT}:"
+  sudo pkill -f "ssh -fN -A -t -L ${HTTPS_TUNN_PORT}:"
+
+  echo "tunnel http(s) stopped"
+}
+
+case $1 in
+  start)
+    _start-tunnel-http $2 $3
+    ;;
+  stop)
+    _stop-tunnel-http
+    ;;
+  *)
+    echo "Usage: $0 {start|stop}"
+    exit 1
+esac
